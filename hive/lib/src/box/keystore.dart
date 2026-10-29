@@ -5,7 +5,9 @@ import 'package:hive_ce/src/binary/frame.dart';
 import 'package:hive_ce/src/box/change_notifier.dart';
 import 'package:hive_ce/src/box/default_key_comparator.dart';
 import 'package:hive_ce/src/object/hive_object.dart';
+import 'package:hive_ce/src/util/compact_frame_index.dart';
 import 'package:hive_ce/src/util/indexable_skip_list.dart';
+import 'package:hive_ce/src/util/key_index.dart';
 import 'package:meta/meta.dart';
 
 import 'package:hive_ce/src/box/box_base_impl.dart';
@@ -29,7 +31,11 @@ class Keystore<E> {
 
   final ChangeNotifier _notifier;
 
-  final IndexableSkipList<dynamic, Frame> _store;
+  final KeyIndex<dynamic, Frame> _store;
+
+  /// Whether this keystore holds only where each value sits in the file
+  /// (a lazy box): frames are stored lazily, in a [CompactFrameIndex].
+  final bool _lazy;
 
   /// Not part of public API
   @visibleForTesting
@@ -39,8 +45,15 @@ class Keystore<E> {
   var _autoIncrement = -1;
 
   /// Not part of public API
-  Keystore(this._box, this._notifier, KeyComparator? keyComparator)
-      : _store = IndexableSkipList(keyComparator ?? defaultKeyComparator);
+  Keystore(
+    this._box,
+    this._notifier,
+    KeyComparator? keyComparator, {
+    bool lazy = false,
+  })  : _lazy = lazy,
+        _store = lazy
+            ? CompactFrameIndex(keyComparator ?? defaultKeyComparator)
+            : IndexableSkipList(keyComparator ?? defaultKeyComparator);
 
   /// Not part of public API
   factory Keystore.debug({
@@ -48,11 +61,13 @@ class Keystore<E> {
     BoxBase<E>? box,
     ChangeNotifier? notifier,
     KeyComparator keyComparator = defaultKeyComparator,
+    bool lazy = false,
   }) {
     final keystore = Keystore<E>(
       box ?? BoxBaseImpl.nullImpl<E>(),
       notifier ?? ChangeNotifier(),
       keyComparator,
+      lazy: lazy,
     );
     for (final frame in frames) {
       keystore.insert(frame);
@@ -160,7 +175,7 @@ class Keystore<E> {
         value.init(key, _box);
       }
 
-      deletedFrame = _store.insert(key, lazy ? frame.toLazy() : frame);
+      deletedFrame = _store.insert(key, lazy || _lazy ? frame.toLazy() : frame);
     } else {
       deletedFrame = _store.delete(frame.key);
     }

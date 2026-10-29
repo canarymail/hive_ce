@@ -13,7 +13,7 @@ class LazyBoxImpl<E> extends BoxBaseImpl<E> implements LazyBox<E> {
     super.compactionStrategy,
     super.backend, {
     super.isolated = false,
-  });
+  }) : super(lazyKeystore: true);
 
   @override
   final lazy = true;

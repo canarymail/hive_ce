@@ -46,8 +46,14 @@ abstract class BoxBaseImpl<E> implements BoxBase<E>, InspectableBox {
     this._compactionStrategy,
     this.backend, {
     this.isolated = false,
+    bool lazyKeystore = false,
   }) {
-    keystore = Keystore(this, ChangeNotifier(), keyComparator);
+    keystore = Keystore(
+      this,
+      ChangeNotifier(),
+      keyComparator,
+      lazy: lazyKeystore,
+    );
   }
 
   /// Not part of public API

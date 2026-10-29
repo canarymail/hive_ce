@@ -1,9 +1,10 @@
 import 'dart:collection';
 import 'dart:math';
+import 'package:hive_ce/src/util/key_index.dart';
 import 'package:meta/meta.dart';
 
 /// Not part of public API
-class IndexableSkipList<K, V> {
+class IndexableSkipList<K, V> implements KeyIndex<K, V> {
   static const _maxHeight = 12;
 
   final _Node<K, V> _head = _Node(
@@ -26,15 +27,19 @@ class IndexableSkipList<K, V> {
       : _random = random ?? Random();
 
   /// Not part of public API
+  @override
   int get length => _length;
 
   /// Not part of public API
+  @override
   Iterable<K> get keys => _KeyIterable(_head);
 
   /// Not part of public API
+  @override
   Iterable<V> get values => _ValueIterable(_head);
 
   /// Not part of public API
+  @override
   V? insert(K key, V? value) {
     final existingNode = _getNode(key);
     if (existingNode != null) {
@@ -113,6 +118,7 @@ class IndexableSkipList<K, V> {
   }
 
   /// Not part of public API
+  @override
   V? delete(K key) {
     final node = _getNode(key);
     if (node == null) return null;
@@ -153,12 +159,14 @@ class IndexableSkipList<K, V> {
   /// Not part of public API
   @pragma('vm:prefer-inline')
   @pragma('dart2js:tryInline')
+  @override
   V? get(K key) => _getNode(key)?.value;
 
   /// Not part of public API
   // TODO: write test
   @pragma('vm:prefer-inline')
   @pragma('dart2js:tryInline')
+  @override
   Iterable<V> valuesFromKey(K key) {
     final node = _getNode(key);
     final virtualHead = _Node(null, null, [node], [0]);
@@ -186,11 +194,13 @@ class IndexableSkipList<K, V> {
   /// Not part of public API
   @pragma('vm:prefer-inline')
   @pragma('dart2js:tryInline')
+  @override
   V? getAt(int index) => _getNodeAt(index).value;
 
   /// Not part of public API
   @pragma('vm:prefer-inline')
   @pragma('dart2js:tryInline')
+  @override
   K? getKeyAt(int index) => _getNodeAt(index).key;
 
   _Node<K, V> _getNodeAt(int index) {
@@ -212,6 +222,7 @@ class IndexableSkipList<K, V> {
   }
 
   /// Not part of public API
+  @override
   void clear() {
     _height = 1;
     for (var i = 0; i < _maxHeight; i++) {

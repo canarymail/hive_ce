@@ -153,9 +153,13 @@ RECOMMENDED ACTIONS:
   @override
   Future<dynamic> readValue(Frame frame, {bool verbatim = false}) {
     return _sync.syncRead(() async {
-      await readRaf.setPosition(frame.offset);
+      // Read both before the first await: a lazy box's frame can follow its
+      // key to a newer write.
+      final offset = frame.offset;
+      final length = frame.length!;
+      await readRaf.setPosition(offset);
 
-      final bytes = await readRaf.read(frame.length!);
+      final bytes = await readRaf.read(length);
 
       final reader = BinaryReaderImpl(bytes, registry);
       final readFrame =

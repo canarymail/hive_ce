@@ -18,9 +18,14 @@ import 'package:hive_ce/src/util/key_index.dart';
 ///
 /// [Frame]s are made on demand. The ones it hands out write a changed
 /// [Frame.offset] back into the index: compaction moves frames in the file
-/// by setting the offset on the frames it was given.
+/// by setting the offset on the frames it was given. The skip list hands out
+/// the frame it stores, so a frame from [get] also sees compaction move it;
+/// [get] returns a [_LiveFrame] that looks its key up when read for that.
 class CompactFrameIndex implements KeyIndex<dynamic, Frame> {
   static const _minPendingToMerge = 256;
+
+  /// `Int64List` is not supported when compiled to JavaScript.
+  static const _isJs = identical(0, 0.0);
 
   final int Function(dynamic, dynamic) _comparator;
 
@@ -28,7 +33,7 @@ class CompactFrameIndex implements KeyIndex<dynamic, Frame> {
   var _keys = <Object>[];
 
   /// Offset of each merged entry; -1 if the frame has not been written.
-  var _offsets = Int64List(0);
+  var _offsets = _newOffsets(0);
 
   /// Length + 1 of each merged entry; 0 if the frame has no length.
   var _lengths = Uint32List(0);
@@ -54,8 +59,17 @@ class CompactFrameIndex implements KeyIndex<dynamic, Frame> {
   @override
   Iterable<Frame> get values => _FrameIterable(this, null);
 
+  static List<int> _newOffsets(int length) =>
+      _isJs ? List<int>.filled(length, 0) : Int64List(length);
+
   @override
   Frame? get(dynamic key) {
+    final frame = _snapshot(key);
+    return frame == null ? null : _LiveFrame(this, frame);
+  }
+
+  /// The entry for [key] as it is now.
+  Frame? _snapshot(dynamic key) {
     if (_pending.containsKey(key)) return _pending[key];
     final index = _indexOf(key);
     return index < 0 ? null : _frameAt(index);
@@ -64,7 +78,11 @@ class CompactFrameIndex implements KeyIndex<dynamic, Frame> {
   @override
   Frame? insert(dynamic key, Frame? value) {
     if (value == null) return delete(key);
-    final old = get(key);
+    // A live frame stored here would look itself up.
+    if (value is _LiveFrame) {
+      value = Frame.lazy(key, length: value.length, offset: value.offset);
+    }
+    final old = _snapshot(key);
     _pending[key] = value;
     if (old == null) _length++;
     _mergeIfLarge();
@@ -73,7 +91,7 @@ class CompactFrameIndex implements KeyIndex<dynamic, Frame> {
 
   @override
   Frame? delete(dynamic key) {
-    final old = get(key);
+    final old = _snapshot(key);
     if (old == null) return null;
     if (_indexOf(key) >= 0) {
       _pending[key] = null;
@@ -105,7 +123,7 @@ class CompactFrameIndex implements KeyIndex<dynamic, Frame> {
   @override
   void clear() {
     _keys = <Object>[];
-    _offsets = Int64List(0);
+    _offsets = _newOffsets(0);
     _lengths = Uint32List(0);
     _pending.clear();
     _length = 0;
@@ -151,7 +169,7 @@ class CompactFrameIndex implements KeyIndex<dynamic, Frame> {
 
     // Exactly sized: a growable list would carry up to 2x slack.
     final keys = List<Object>.filled(_length, 0);
-    final offsets = Int64List(_length);
+    final offsets = _newOffsets(_length);
     final lengths = Uint32List(_length);
     var out = 0;
 
@@ -213,6 +231,8 @@ class CompactFrameIndex implements KeyIndex<dynamic, Frame> {
 
 /// A frame read out of a [CompactFrameIndex] that writes a changed offset
 /// back into it.
+///
+/// Compaction is handed these through [CompactFrameIndex.values].
 class _IndexedFrame extends Frame {
   final CompactFrameIndex _index;
 
@@ -224,6 +244,39 @@ class _IndexedFrame extends Frame {
     final old = super.offset;
     super.offset = value;
     if (old != value) _index._updateOffset(key, old, value);
+  }
+}
+
+/// A frame from [CompactFrameIndex.get]. A lazy box reads its value only
+/// once the read's turn on the file comes, possibly after a compaction moved
+/// it, so this reads its offset and length from the index when asked.
+///
+/// If the key has since been written again, that is the newer value; if it
+/// has been deleted, this keeps the offset it was handed out with, as the
+/// skip list's frame would.
+class _LiveFrame extends Frame {
+  final CompactFrameIndex _index;
+
+  _LiveFrame(this._index, Frame frame)
+      : super.lazy(frame.key, length: frame.length, offset: frame.offset);
+
+  Frame? get _current => _index._snapshot(key);
+
+  @override
+  int get offset => _current?.offset ?? super.offset;
+
+  /// Writes back only over the entry it was handed out for.
+  @override
+  set offset(int value) {
+    final old = super.offset;
+    super.offset = value;
+    if (old != value) _index._updateOffset(key, old, value);
+  }
+
+  @override
+  int? get length {
+    final current = _current;
+    return current == null ? super.length : current.length;
   }
 }
 
@@ -268,7 +321,7 @@ class _FrameIterable extends IterableBase<Frame> {
 class _FrameIterator implements Iterator<Frame> {
   final CompactFrameIndex _index;
   final List<Object> _keys;
-  final Int64List _offsets;
+  final List<int> _offsets;
   final Uint32List _lengths;
   int _next;
   Frame? _current;

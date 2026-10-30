@@ -123,6 +123,28 @@ void main() {
       await expectContents(box, expected);
     });
 
+    test('a read queued behind a compaction reads the moved value', () async {
+      final name = generateBoxName();
+      final box = await hive.openLazyBox<String>(
+        name,
+        compactionStrategy: (entries, deleted) => false,
+      );
+      for (var i = 0; i < 100; i++) {
+        await box.put('k$i', 'v${i.toString().padLeft(3, '0')}');
+      }
+      for (var i = 0; i < 50; i++) {
+        await box.delete('k$i');
+      }
+
+      final compaction = box.compact();
+      final actualReads = [for (var i = 50; i < 100; i++) box.get('k$i')];
+      await compaction;
+
+      expect(await Future.wait(actualReads), [
+        for (var i = 50; i < 100; i++) 'v${i.toString().padLeft(3, '0')}',
+      ]);
+    });
+
     test('.clear() then new writes read back', () async {
       final name = generateBoxName();
       var box = await open(name);

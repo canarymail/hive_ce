@@ -1,6 +1,8 @@
 ## Unreleased (canarymail fork)
 
 - Lazy boxes keep their key index in sorted arrays (`CompactFrameIndex`) instead of a skip list: ~65 bytes a key instead of ~230, and fewer allocations when a box opens. Boxes that hold their values are unchanged.
+  - A frame from `get` follows its key, so a read queued behind a compaction reads the moved value, as the skip list's shared frame did.
+  - Offsets use `Int64List` only on native platforms; it is unsupported when compiled to JavaScript.
 
 ## 2.15.1
 

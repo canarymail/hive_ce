@@ -284,6 +284,73 @@ void main() {
       });
     });
 
+    group('frames from .get()', () {
+      /// What compaction does: rewrites the file and moves every frame.
+      void compact(CompactFrameIndex index) {
+        var newOffset = 0;
+        for (final frame in index.values.toList()) {
+          frame.offset = newOffset;
+          newOffset += frame.length!;
+        }
+      }
+
+      test('follow a compaction that runs after .get()', () {
+        for (var i = 0; i < 1000; i++) {
+          actualIndex.insert(i, lazyFrame(i, offset: 7 + i * 25));
+        }
+        final inputFrame = actualIndex.get(500)!;
+
+        compact(actualIndex);
+
+        expect(describe(inputFrame), (500, 5000, 10));
+      });
+
+      test('follow a compaction that merges the pending entry', () {
+        for (var i = 0; i < 1000; i++) {
+          actualIndex.insert(i, lazyFrame(i, offset: 7 + i * 25));
+        }
+        actualIndex.keys.toList();
+        actualIndex.insert(2000, lazyFrame(2000, offset: 99999));
+        final inputFrame = actualIndex.get(2000)!;
+
+        compact(actualIndex);
+
+        expect(describe(inputFrame), (2000, 10000, 10));
+      });
+
+      test('read a newer write of the key', () {
+        actualIndex.insert('a', lazyFrame('a', offset: 4, length: 3));
+        final inputFrame = actualIndex.get('a')!;
+
+        actualIndex.insert('a', lazyFrame('a', offset: 40, length: 30));
+
+        expect(describe(inputFrame), ('a', 40, 30));
+      });
+
+      test('keep their offset once the key is deleted', () {
+        for (var i = 0; i < 300; i++) {
+          actualIndex.insert(i, lazyFrame(i, offset: 1000 + i));
+        }
+        final inputFrame = actualIndex.get(7)!;
+
+        actualIndex.delete(7);
+        compact(actualIndex);
+
+        expect(describe(inputFrame), (7, 1007, 10));
+      });
+
+      test('are stored as plain frames when inserted back', () {
+        actualIndex.insert('a', lazyFrame('a', offset: 4));
+        final inputFrame = actualIndex.get('a')!;
+        actualIndex.delete('a');
+
+        actualIndex.insert('a', inputFrame);
+        actualIndex.keys.toList();
+
+        expect(describe(actualIndex.get('a')!), ('a', 4, 10));
+      });
+    });
+
     group('matches the skip list', () {
       /// Runs the same random operations on both and compares every read.
       void runDifferential(

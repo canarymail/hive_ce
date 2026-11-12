@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:hive_ce/hive.dart';
 import 'package:hive_ce/src/backend/lock_props.dart';
@@ -13,6 +14,7 @@ import 'package:hive_ce/src/box/keystore.dart';
 import 'package:hive_ce/src/io/buffered_file_reader.dart';
 import 'package:hive_ce/src/io/buffered_file_writer.dart';
 import 'package:hive_ce/src/io/frame_io_helper.dart';
+import 'package:hive_ce/src/registry/type_registry_impl.dart';
 import 'package:hive_ce/src/util/debug_utils.dart';
 import 'package:meta/meta.dart';
 
@@ -125,17 +127,28 @@ RECOMMENDED ACTIONS:
     lockRaf.flushSync();
     await lockRaf.lock();
 
-    int recoveryOffset;
-    if (!lazy) {
-      recoveryOffset = await _frameHelper.framesFromFile(
-        path,
-        keystore,
+    int? recoveryOffset;
+    if (_frameHelper.runtimeType == FrameIoHelper) {
+      recoveryOffset = await _readOffIsolate(
         registry,
-        _cipher,
+        keystore,
+        lazy,
         verbatim: isolated,
       );
-    } else {
-      recoveryOffset = await _frameHelper.keysFromFile(path, keystore, _cipher);
+    }
+    if (recoveryOffset == null) {
+      if (!lazy) {
+        recoveryOffset = await _frameHelper.framesFromFile(
+          path,
+          keystore,
+          registry,
+          _cipher,
+          verbatim: isolated,
+        );
+      } else {
+        recoveryOffset =
+            await _frameHelper.keysFromFile(path, keystore, _cipher);
+      }
     }
 
     if (recoveryOffset != -1) {
@@ -148,6 +161,72 @@ RECOMMENDED ACTIONS:
         throw HiveError('Wrong checksum in hive file. Box may be corrupted.');
       }
     }
+  }
+
+  /// Reads the file into [keystore] on another isolate, so opening a box
+  /// costs this isolate next to nothing: decoding every frame of a large box
+  /// took hundreds of milliseconds of it, which on the UI isolate stalls the
+  /// app. The index is built there and handed back without a copy
+  /// ([Isolate.exit]). Returns the recovery offset as the in-isolate read
+  /// does, or null when it could not run here (the caller reads the file on
+  /// this isolate instead). A file nothing was written to yet is read here.
+  Future<int?> _readOffIsolate(
+    TypeRegistry registry,
+    Keystore keystore,
+    bool lazy, {
+    required bool verbatim,
+  }) async {
+    if (writeOffset < _minOffIsolateBytes) return null;
+    final spec = keystore.detachedSpec;
+    if (spec.lazy != lazy) return null;
+    // Locals only: a closure that read a field would capture this backend,
+    // whose open files cannot be sent to another isolate.
+    final filePath = path;
+    final cipher = _cipher;
+    // A lazy box decodes no values.
+    final adapters = lazy
+        ? TypeRegistryImpl.nullImpl
+        : registry is TypeRegistryImpl
+            ? registry.adaptersOnly()
+            : null;
+    if (adapters == null) return null;
+    try {
+      final read = await Isolate.run(
+        () => _readDetached(filePath, spec, adapters, cipher, verbatim),
+        debugName: 'hive open',
+      );
+      keystore.adopt(read.keys);
+      return read.recoveryOffset;
+    } catch (e) {
+      debugPrint('Hive: reading $path off the isolate failed ($e); '
+          'reading it here.');
+      return null;
+    }
+  }
+
+  /// Smaller files are read on the box's isolate: starting an isolate costs
+  /// more than reading them.
+  static const _minOffIsolateBytes = 64 * 1024;
+
+  static Future<({int recoveryOffset, DetachedKeys keys})> _readDetached(
+    String path,
+    ({KeyComparator? keyComparator, bool lazy}) spec,
+    TypeRegistry registry,
+    HiveCipher? cipher,
+    bool verbatim,
+  ) async {
+    final keystore = Keystore.detached<dynamic>(spec);
+    final helper = FrameIoHelper();
+    final recoveryOffset = spec.lazy
+        ? await helper.keysFromFile(path, keystore, cipher)
+        : await helper.framesFromFile(
+            path,
+            keystore,
+            registry,
+            cipher,
+            verbatim: verbatim,
+          );
+    return (recoveryOffset: recoveryOffset, keys: keystore.detachedKeys);
   }
 
   @override

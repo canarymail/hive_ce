@@ -31,7 +31,13 @@ class Keystore<E> {
 
   final ChangeNotifier _notifier;
 
-  final KeyIndex<dynamic, Frame> _store;
+  KeyIndex<dynamic, Frame> _store;
+
+  final KeyComparator? _keyComparator;
+
+  /// Built off the box's isolate to be adopted by it ([adopt]): values are
+  /// not tied to a box, and nothing is notified.
+  final bool _detached;
 
   /// Whether this keystore holds only where each value sits in the file
   /// (a lazy box): frames are stored lazily, in a [CompactFrameIndex].
@@ -50,7 +56,10 @@ class Keystore<E> {
     this._notifier,
     KeyComparator? keyComparator, {
     bool lazy = false,
+    bool detached = false,
   })  : _lazy = lazy,
+        _keyComparator = keyComparator,
+        _detached = detached,
         _store = lazy
             ? CompactFrameIndex(keyComparator ?? defaultKeyComparator)
             : IndexableSkipList(keyComparator ?? defaultKeyComparator);
@@ -73,6 +82,53 @@ class Keystore<E> {
       keystore.insert(frame);
     }
     return keystore;
+  }
+
+  /// Not part of public API
+  ///
+  /// What another isolate needs to build this keystore's index: see
+  /// [Keystore.detached] and [adopt].
+  ({KeyComparator? keyComparator, bool lazy}) get detachedSpec =>
+      (keyComparator: _keyComparator, lazy: _lazy);
+
+  /// Not part of public API
+  ///
+  /// A keystore to fill on another isolate, from [detachedSpec].
+  static Keystore<E> detached<E>(
+    ({KeyComparator? keyComparator, bool lazy}) spec,
+  ) =>
+      Keystore<E>(
+        BoxBaseImpl.nullImpl<E>(),
+        ChangeNotifier(),
+        spec.keyComparator,
+        lazy: spec.lazy,
+        detached: true,
+      );
+
+  /// Not part of public API
+  ///
+  /// The index a detached keystore built, to send back to the box's isolate.
+  DetachedKeys get detachedKeys => DetachedKeys._(
+        _store,
+        _deletedEntries,
+        _autoIncrement,
+      );
+
+  /// Not part of public API
+  ///
+  /// Takes over an index built by a detached keystore on another isolate, in
+  /// place of loading the box here: the box then opens without decoding its
+  /// file on this isolate. Values that are [HiveObjectMixin]s are tied to
+  /// this keystore's box.
+  void adopt(DetachedKeys keys) {
+    _store = keys._store;
+    _deletedEntries = keys._deletedEntries;
+    _autoIncrement = keys._autoIncrement;
+    if (_lazy) return;
+    for (final frame in _store.values) {
+      final value = frame.value;
+      if (value is HiveObjectMixin) value.init(frame.key, _box);
+    }
   }
 
   /// Not part of public API
@@ -171,7 +227,7 @@ class Keystore<E> {
         _autoIncrement = key;
       }
 
-      if (value is HiveObjectMixin) {
+      if (value is HiveObjectMixin && !_detached) {
         value.init(key, _box);
       }
 
@@ -182,13 +238,14 @@ class Keystore<E> {
 
     if (deletedFrame != null) {
       _deletedEntries++;
-      if (deletedFrame.value is HiveObjectMixin &&
+      if (!_detached &&
+          deletedFrame.value is HiveObjectMixin &&
           !identical(deletedFrame.value, value)) {
         (deletedFrame.value as HiveObjectMixin).dispose();
       }
     }
 
-    if (notify && (!frame.deleted || deletedFrame != null)) {
+    if (notify && !_detached && (!frame.deleted || deletedFrame != null)) {
       _notifier.notify(frame, deletedValue: deletedFrame?.value);
     }
 
@@ -287,4 +344,15 @@ class Keystore<E> {
   Future close() {
     return _notifier.close();
   }
+}
+
+/// Not part of public API
+///
+/// A keystore's index built on another isolate (see [Keystore.adopt]).
+class DetachedKeys {
+  final KeyIndex<dynamic, Frame> _store;
+  final int _deletedEntries;
+  final int _autoIncrement;
+
+  DetachedKeys._(this._store, this._deletedEntries, this._autoIncrement);
 }

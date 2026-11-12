@@ -65,6 +65,9 @@ class _NullTypeRegistry implements TypeRegistryImpl {
 
   @override
   Never resetAdapters() => throw UnimplementedError();
+
+  @override
+  TypeRegistryImpl adaptersOnly() => this;
 }
 
 /// Not part of public API
@@ -108,6 +111,16 @@ class TypeRegistryImpl implements TypeRegistry {
   TypeRegistryImpl() {
     _registerDefaultAdapters(this);
   }
+
+  TypeRegistryImpl._adaptersOf(TypeRegistryImpl other) {
+    _typeAdapters.addAll(other._typeAdapters);
+  }
+
+  /// Not part of public API
+  ///
+  /// A registry with this one's adapters and nothing else, to send to another
+  /// isolate: [HiveImpl] is also the registry, and holds its open boxes.
+  TypeRegistryImpl adaptersOnly() => TypeRegistryImpl._adaptersOf(this);
 
   static void _registerDefaultAdapters(TypeRegistry registry) {
     registry.registerAdapter(DateTimeWithTimezoneAdapter(), internal: true);
